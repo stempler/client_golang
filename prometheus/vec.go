@@ -241,7 +241,14 @@ func (m *metricMap) Collect(ch chan<- Metric) {
 
 	for _, metrics := range m.metrics {
 		for _, metric := range metrics {
-			ch <- metric.metric
+			c, ok := metric.metric.(Collector)
+			if ok {
+				// if the metric is a collector
+				// prefer Collect() over passing metric directly
+				c.Collect(ch)
+			} else {
+				ch <- metric.metric
+			}
 		}
 	}
 }

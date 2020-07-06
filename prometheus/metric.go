@@ -91,6 +91,14 @@ type Opts struct {
 	// machine_role metric). See also
 	// https://prometheus.io/docs/instrumenting/writing_exporters/#target-labels,-not-static-scraped-labels
 	ConstLabels Labels
+
+	// PredateInitialization can be set to force a metric to be
+	// initialized when it is first collected. The duration that is
+	// specified is the amount of time the initialization is predated.
+	// This can be used to force initialization of a counter to zero.
+	// The actual metric value will only be collected after the initial
+	// collection of the metric.
+	PredateInitialization time.Duration
 }
 
 // BuildFQName joins the given three name components by "_". Empty name

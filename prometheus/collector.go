@@ -13,6 +13,10 @@
 
 package prometheus
 
+import (
+	"time"
+)
+
 // Collector is the interface implemented by anything that can be used by
 // Prometheus to collect metrics. A Collector has to be registered for
 // collection. See Registerer.Register.
@@ -117,4 +121,46 @@ func (c *selfCollector) Describe(ch chan<- *Desc) {
 // Collect implements Collector.
 func (c *selfCollector) Collect(ch chan<- Metric) {
 	ch <- c.self
+}
+
+// lateInitCollector implements Collector for a single Metric so that the Metric
+// collects itself. Add it as an anonymous field to a struct that implements
+// Metric, and call init with the Metric itself as an argument.
+type lateInitCollector struct {
+	collected bool //XXX do we need to do atmic operations or synchronization?
+
+	self                  Metric        // The metric to collect (except for the first time)
+	initMetric            Metric        // The metric to collect on initialization (if preDateInitialization is set)
+	predateInitialization time.Duration // If specified enables initialization using above metric, pre dated by the given duration
+
+	now func() time.Time // To mock out time.Now() for testing.
+}
+
+// init provides the lateInitCollector with a reference to the metric it is supposed
+// to collect. It is usually called within the factory function to create a
+// metric. See example.
+func (c *lateInitCollector) init(self Metric, initMetric Metric, predateInitialization time.Duration, now func() time.Time) {
+	c.self = self
+	c.initMetric = initMetric
+	c.predateInitialization = predateInitialization
+
+	c.collected = false
+
+	c.now = now
+}
+
+// Describe implements Collector.
+func (c *lateInitCollector) Describe(ch chan<- *Desc) {
+	ch <- c.self.Desc()
+}
+
+// Collect implements Collector.
+func (c *lateInitCollector) Collect(ch chan<- Metric) {
+	if c.initMetric == nil || c.predateInitialization == 0 || c.collected {
+		ch <- c.self
+	} else {
+		before := c.now().Add(-c.predateInitialization)
+		ch <- NewMetricWithTimestamp(before, c.initMetric)
+		c.collected = true
+	}
 }

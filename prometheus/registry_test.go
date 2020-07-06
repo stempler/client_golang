@@ -20,6 +20,7 @@
 package prometheus_test
 
 import (
+	"bufio"
 	"bytes"
 	"fmt"
 	"io/ioutil"
@@ -27,6 +28,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -1086,6 +1089,117 @@ test_summary_count{name="foo"} 2
 			"files don't match, got:\n%s\nwant:\n%s",
 			fileContents, expectedOut,
 		)
+	}
+}
+
+func TestWriteToTextfileCounterLateInit(t *testing.T) {
+	registry := prometheus.NewRegistry()
+
+	preDate, _ := time.ParseDuration("15s")
+
+	counter := prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name:                  "test_counter",
+			Help:                  "test counter",
+			PredateInitialization: preDate,
+		},
+		[]string{"name"},
+	)
+
+	registry.MustRegister(counter)
+
+	counter.With(prometheus.Labels{"name": "qux"}).Inc()
+
+	// first time -> initialization w/ zero
+
+	tmpfile, err := ioutil.TempFile("", "prom_registry_test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(tmpfile.Name())
+
+	if err := prometheus.WriteToTextfile(tmpfile.Name(), registry); err != nil {
+		t.Fatal(err)
+	}
+
+	file, err := os.Open(tmpfile.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	scanner := bufio.NewScanner(file)
+	scanner.Split(bufio.ScanLines)
+	var txtlines []string
+
+	for scanner.Scan() {
+		txtlines = append(txtlines, scanner.Text())
+	}
+
+	file.Close()
+
+	if (len(txtlines)) != 3 {
+		t.Errorf("expeced %d lines, got %d", 3, len(txtlines))
+	}
+
+	// Compare line by line
+	for i, line := range txtlines {
+		switch i {
+		case 0:
+			checkLine(t, i, line, "# HELP test_counter test counter")
+		case 1:
+			checkLine(t, i, line, "# TYPE test_counter counter")
+		case 2:
+			// print line for reference
+			fmt.Println(line)
+
+			prefix := "test_counter{name=\"qux\"} 0 "
+			if !strings.HasPrefix(line, prefix) {
+				t.Errorf("counter should report zero, found: %s", line)
+			}
+			timeStr := strings.TrimPrefix(line, prefix)
+			_, err := strconv.Atoi(timeStr)
+			if err != nil {
+				t.Errorf("could not parse timestamp string %s as number", timeStr)
+			}
+
+			//FIXME how to test correct predating?
+		}
+	}
+
+	// second time -> actual value is reported
+
+	expectedOut := `# HELP test_counter test counter
+# TYPE test_counter counter
+test_counter{name="qux"} 1
+`
+
+	tmpfile2, err := ioutil.TempFile("", "prom_registry_test_2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(tmpfile2.Name())
+
+	if err := prometheus.WriteToTextfile(tmpfile2.Name(), registry); err != nil {
+		t.Fatal(err)
+	}
+
+	fileBytes, err := ioutil.ReadFile(tmpfile2.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	fileContents := string(fileBytes)
+
+	if fileContents != expectedOut {
+		t.Errorf(
+			"files don't match, got:\n%s\nwant:\n%s",
+			fileContents, expectedOut,
+		)
+	}
+}
+
+func checkLine(t *testing.T, num int, line string, expected string) {
+	if expected != line {
+		t.Errorf("line %d does not match, got:\n%s\nwant:\n%s", num, line, expected)
 	}
 }
 

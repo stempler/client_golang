@@ -79,7 +79,12 @@ func NewCounter(opts CounterOpts) Counter {
 		opts.ConstLabels,
 	)
 	result := &counter{desc: desc, labelPairs: desc.constLabelPairs, now: time.Now}
-	result.init(result) // Init self-collection.
+	lvs := make([]string, len(desc.constLabelPairs))
+	for i, v := range desc.constLabelPairs {
+		lvs[i] = *v.Value
+	}
+	zeroCounter := MustNewConstMetric(desc, CounterValue, 0.0, lvs...)
+	result.init(result, zeroCounter, opts.PredateInitialization, time.Now) // Init self-collection.
 	return result
 }
 
@@ -91,7 +96,7 @@ type counter struct {
 	valBits uint64
 	valInt  uint64
 
-	selfCollector
+	lateInitCollector
 	desc *Desc
 
 	labelPairs []*dto.LabelPair
@@ -181,7 +186,8 @@ func NewCounterVec(opts CounterOpts, labelNames []string) *CounterVec {
 				panic(makeInconsistentCardinalityError(desc.fqName, desc.variableLabels, lvs))
 			}
 			result := &counter{desc: desc, labelPairs: makeLabelPairs(desc, lvs), now: time.Now}
-			result.init(result) // Init self-collection.
+			zeroCounter := MustNewConstMetric(desc, CounterValue, 0.0, lvs...)
+			result.init(result, zeroCounter, opts.PredateInitialization, time.Now) // Init self-collection.
 			return result
 		}),
 	}
