@@ -149,6 +149,14 @@ type HistogramOpts struct {
 	// to add a highest bucket with +Inf bound, it will be added
 	// implicitly. The default value is DefBuckets.
 	Buckets []float64
+
+	// PredateInitialization can be set to force a metric to be
+	// initialized when it is first collected. The duration that is
+	// specified is the amount of time the initialization is predated.
+	// This can be used to force initialization of a counter to zero.
+	// The actual metric value will only be collected after the initial
+	// collection of the metric.
+	PredateInitialization time.Duration
 }
 
 // NewHistogram creates a new Histogram based on the provided HistogramOpts. It
@@ -217,7 +225,13 @@ func newHistogram(desc *Desc, opts HistogramOpts, labelValues ...string) Histogr
 	h.counts[1].buckets = make([]uint64, len(h.upperBounds))
 	h.exemplars = make([]atomic.Value, len(h.upperBounds)+1)
 
-	h.init(h) // Init self-collection.
+	initBuckets := make(map[float64]uint64, len(h.upperBounds))
+	for _, bounds := range h.upperBounds {
+		initBuckets[bounds] = 0
+	}
+	initMetric := MustNewConstHistogram(desc, 0, 0.0, initBuckets, labelValues...)
+
+	h.init(h, initMetric, opts.PredateInitialization, time.Now) // Init self-collection.
 	return h
 }
 
@@ -250,7 +264,7 @@ type histogram struct {
 	// http://golang.org/pkg/sync/atomic/#pkg-note-BUG
 	countAndHotIdx uint64
 
-	selfCollector
+	lateInitCollector
 	desc     *Desc
 	writeMtx sync.Mutex // Only used in the Write method.
 

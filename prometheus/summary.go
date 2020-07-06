@@ -139,6 +139,14 @@ type SummaryOpts struct {
 	// is the internal buffer size of the underlying package
 	// "github.com/bmizerany/perks/quantile").
 	BufCap uint32
+
+	// PredateInitialization can be set to force a metric to be
+	// initialized when it is first collected. The duration that is
+	// specified is the amount of time the initialization is predated.
+	// This can be used to force initialization of a counter to zero.
+	// The actual metric value will only be collected after the initial
+	// collection of the metric.
+	PredateInitialization time.Duration
 }
 
 // Problem with the sliding-window decay algorithm... The Merge method of
@@ -211,7 +219,11 @@ func newSummary(desc *Desc, opts SummaryOpts, labelValues ...string) Summary {
 			labelPairs: makeLabelPairs(desc, labelValues),
 			counts:     [2]*summaryCounts{{}, {}},
 		}
-		s.init(s) // Init self-collection.
+
+		initQuantiles := make(map[float64]float64, 0)
+		initMetric := MustNewConstSummary(desc, 0, 0.0, initQuantiles, labelValues...)
+
+		s.init(s, initMetric, opts.PredateInitialization, time.Now) // Init self-collection.
 		return s
 	}
 
@@ -240,12 +252,18 @@ func newSummary(desc *Desc, opts SummaryOpts, labelValues ...string) Summary {
 	}
 	sort.Float64s(s.sortedObjectives)
 
-	s.init(s) // Init self-collection.
+	initQuantiles := make(map[float64]float64, len(s.sortedObjectives))
+	for _, qu := range s.sortedObjectives {
+		initQuantiles[qu] = 0.0
+	}
+	initMetric := MustNewConstSummary(desc, 0, 0.0, initQuantiles, labelValues...)
+
+	s.init(s, initMetric, opts.PredateInitialization, time.Now) // Init self-collection.
 	return s
 }
 
 type summary struct {
-	selfCollector
+	lateInitCollector
 
 	bufMtx sync.Mutex // Protects hotBuf and hotBufExpTime.
 	mtx    sync.Mutex // Protects every other moving part.
@@ -411,7 +429,7 @@ type noObjectivesSummary struct {
 	// http://golang.org/pkg/sync/atomic/#pkg-note-BUG
 	countAndHotIdx uint64
 
-	selfCollector
+	lateInitCollector
 	desc     *Desc
 	writeMtx sync.Mutex // Only used in the Write method.
 
